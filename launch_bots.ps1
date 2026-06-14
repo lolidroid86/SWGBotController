@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # SWG Bot Launcher - Phase 1
 # Launches multiple SWGEmu clients with per-bot auto-login and grid layout.
+# Uses per-bot patched EXEs with unique mutex names to allow multiple instances.
 
 param(
     [string]$ConfigFile = "$PSScriptRoot\bots.json"
@@ -9,7 +10,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Load config ──────────────────────────────────────────────────────────────
+# --- Load config ---
 $config      = Get-Content $ConfigFile -Raw | ConvertFrom-Json
 $swgDir      = $config.swgDir
 $swgExe      = Join-Path $swgDir "SWGEmu.exe"
@@ -25,7 +26,7 @@ if (-not (Test-Path $swgExe)) {
     exit 1
 }
 
-# ── Ensure swgemu.cfg includes user.cfg ──────────────────────────────────────
+# --- Ensure swgemu.cfg includes user.cfg ---
 $swgCfg = Get-Content $swgCfgPath -Raw
 if ($swgCfg -match '#\.include "user\.cfg"') {
     $swgCfg = $swgCfg -replace '#\.include "user\.cfg"', '.include "user.cfg"'
@@ -33,7 +34,38 @@ if ($swgCfg -match '#\.include "user\.cfg"') {
     Write-Host "[setup] Enabled user.cfg include in swgemu.cfg"
 }
 
-# ── Win32 API ────────────────────────────────────────────────────────────────
+# --- Patch exe: replace mutex name so each bot instance can run independently ---
+# Original: "SwgClientInstanceRunning" (24 bytes)
+# Per-bot:  "SwgClientInstanceBot0001" (24 bytes)
+function Get-BotExe {
+    param([int]$Index)
+    $id   = "{0:D4}" -f ($Index + 1)
+    $dest = Join-Path $swgDir "SWGEmu_bot$id.exe"
+    if (-not (Test-Path $dest)) {
+        Write-Host "  [patch] Creating $dest"
+        $oldBytes = [System.Text.Encoding]::ASCII.GetBytes("SwgClientInstanceRunning")
+        $newBytes = [System.Text.Encoding]::ASCII.GetBytes("SwgClientInstanceBot$id")
+        $exeBytes = [System.IO.File]::ReadAllBytes($swgExe)
+        $patched  = 0
+        for ($i = 0; $i -le $exeBytes.Length - $oldBytes.Length; $i++) {
+            $match = $true
+            for ($j = 0; $j -lt $oldBytes.Length; $j++) {
+                if ($exeBytes[$i + $j] -ne $oldBytes[$j]) { $match = $false; break }
+            }
+            if ($match) {
+                for ($j = 0; $j -lt $newBytes.Length; $j++) {
+                    $exeBytes[$i + $j] = $newBytes[$j]
+                }
+                $patched++
+            }
+        }
+        [System.IO.File]::WriteAllBytes($dest, $exeBytes)
+        Write-Host "  [patch] Done ($patched occurrence(s) replaced)"
+    }
+    return $dest
+}
+
+# --- Win32 API ---
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -43,9 +75,9 @@ public class Win32 {
         int X, int Y, int cx, int cy, uint flags);
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    public const uint SWP_NOZORDER    = 0x0004;
-    public const uint SWP_NOACTIVATE  = 0x0010;
-    public const int  SW_MINIMIZE     = 6;
+    public const uint SWP_NOZORDER   = 0x0004;
+    public const uint SWP_NOACTIVATE = 0x0010;
+    public const int  SW_MINIMIZE    = 6;
 }
 "@
 
@@ -54,40 +86,33 @@ function Wait-WindowHandle {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $Proc.Refresh()
-        if ($Proc.MainWindowHandle -ne [IntPtr]::Zero) { return $Proc.MainWindowHandle }
+        $h = $Proc.MainWindowHandle
+        if ($h -ne $null -and $h.ToInt64() -ne 0) { return $h }
         Start-Sleep -Milliseconds 500
     }
-    return [IntPtr]::Zero
+    return $null
 }
 
-# ── Launch loop ──────────────────────────────────────────────────────────────
+# --- Launch loop ---
 $procs = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 
-foreach ($bot in $config.bots) {
-    Write-Host "[launch] $($bot.username)"
+for ($i = 0; $i -lt $config.bots.Count; $i++) {
+    $bot    = $config.bots[$i]
+    $botExe = Get-BotExe -Index $i
+    Write-Host "[launch] $($bot.username) via $(Split-Path $botExe -Leaf)"
 
-    # Write per-bot user.cfg — client reads this at startup
-    $userCfg = @"
-[ClientGame]
-loginClientID=$($bot.username)
-loginClientPassword=$($bot.password)
-autoConnectToLoginServer=1
-
-[ClientGraphics]
-screenWidth=$winW
-screenHeight=$winH
-windowed=1
-"@
+    $userCfg = "[ClientGame]`r`nloginClientID=$($bot.username)`r`nloginClientPassword=$($bot.password)`r`nautoConnectToLoginServer=1`r`n`r`n[ClientGraphics]`r`nscreenWidth=$winW`r`nscreenHeight=$winH`r`nwindowed=1`r`n"
     [System.IO.File]::WriteAllText($userCfgPath, $userCfg, [System.Text.Encoding]::ASCII)
 
-    $proc = Start-Process -FilePath $swgExe -WorkingDirectory $swgDir -PassThru
+    $proc = Start-Process -FilePath $botExe -WorkingDirectory $swgDir -PassThru
     $procs.Add($proc)
 
-    Write-Host "  PID $($proc.Id) — waiting ${delaySec}s for config read..."
+    Write-Host "  PID $($proc.Id) - waiting ${delaySec}s for config read..."
     Start-Sleep -Seconds $delaySec
 }
 
-Write-Host "`n[layout] Arranging $($procs.Count) windows in ${cols}-column grid (${winW}x${winH})..."
+Write-Host ""
+Write-Host "[layout] Arranging $($procs.Count) windows in $cols-column grid (${winW}x${winH})..."
 
 for ($i = 0; $i -lt $procs.Count; $i++) {
     $proc = $procs[$i]
@@ -96,9 +121,9 @@ for ($i = 0; $i -lt $procs.Count; $i++) {
     $x    = $col * $winW
     $y    = $row * $winH
 
-    Write-Host "  bot$($i+1) → grid ($col,$row) pixel ($x,$y)"
+    Write-Host "  $($config.bots[$i].username) -> grid ($col,$row) pixel ($x,$y)"
     $hwnd = Wait-WindowHandle -Proc $proc -TimeoutSec 20
-    if ($hwnd -ne [IntPtr]::Zero) {
+    if ($hwnd -ne $null) {
         [Win32]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, $winW, $winH,
             [Win32]::SWP_NOZORDER -bor [Win32]::SWP_NOACTIVATE) | Out-Null
         [Win32]::ShowWindow($hwnd, [Win32]::SW_MINIMIZE) | Out-Null
@@ -108,8 +133,10 @@ for ($i = 0; $i -lt $procs.Count; $i++) {
     }
 }
 
-# ── Clean up user.cfg so normal play isn't affected ─────────────────────────
-Write-Host "`n[cleanup] Removing user.cfg"
+# --- Clean up user.cfg so normal play is not affected ---
+Write-Host ""
+Write-Host "[cleanup] Removing user.cfg"
 Remove-Item $userCfgPath -ErrorAction SilentlyContinue
 
-Write-Host "`n[done] All bots launched. Close this window to exit."
+Write-Host ""
+Write-Host "[done] All bots launched. Close this window to exit."
