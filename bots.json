@@ -1,0 +1,26 @@
+{
+  "swgDir": "F:\\mmo emulators\\SWGEmu\\StarWarsGalaxies",
+  "startupDelaySec": 8,
+  "layout": {
+    "columns": 4,
+    "windowWidth": 480,
+    "windowHeight": 270
+  },
+  "bots": [
+    { "username": "bot_doctor",       "password": "botpass1"  },
+    { "username": "bot_entertainer",  "password": "botpass2"  },
+    { "username": "bot_commando",     "password": "botpass3"  },
+    { "username": "bot_jedi",         "password": "botpass4"  },
+    { "username": "bot_terasikasi",   "password": "botpass5"  },
+    { "username": "bot_smuggler",     "password": "botpass6"  },
+    { "username": "bot_armorsmith",   "password": "botpass7"  },
+    { "username": "bot_weaponsmith",  "password": "botpass8"  },
+    { "username": "bot_chef",         "password": "botpass9"  },
+    { "username": "bot_tailor",       "password": "botpass10" },
+    { "username": "bot_architect",    "password": "botpass11" },
+    { "username": "bot_droideng",     "password": "botpass12" },
+    { "username": "bot_shipwright",   "password": "botpass13" },
+    { "username": "bot_bioengineer",  "password": "botpass14" },
+    { "username": "bot_merchant",     "password": "botpass15" }
+  ]
+}
