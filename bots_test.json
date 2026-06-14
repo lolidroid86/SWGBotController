@@ -1,0 +1,13 @@
+{
+  "swgDir": "F:\\mmo emulators\\SWGEmu\\StarWarsGalaxies",
+  "startupDelaySec": 6,
+  "layout": {
+    "columns": 2,
+    "windowWidth": 640,
+    "windowHeight": 480
+  },
+  "bots": [
+    { "username": "bot_doctor",      "password": "botpass1" },
+    { "username": "bot_entertainer", "password": "botpass2" }
+  ]
+}
