@@ -1,7 +1,9 @@
 #Requires -Version 5.1
 # SWG Bot Launcher - Phase 1
 # Launches multiple SWGEmu clients with per-bot auto-login and grid layout.
-# Uses per-bot patched EXEs with unique mutex names to allow multiple instances.
+# allowMultipleInstances must be in [SwgClient] section (not [ClientGame]).
+# Source: SwgClient/src/win32/ClientMain.cpp
+#   ConfigFile::getKeyBool("SwgClient", "allowMultipleInstances", false)
 
 param(
     [string]$ConfigFile = "$PSScriptRoot\bots.json"
@@ -32,37 +34,6 @@ if ($swgCfg -match '#\.include "user\.cfg"') {
     $swgCfg = $swgCfg -replace '#\.include "user\.cfg"', '.include "user.cfg"'
     [System.IO.File]::WriteAllText($swgCfgPath, $swgCfg, [System.Text.Encoding]::ASCII)
     Write-Host "[setup] Enabled user.cfg include in swgemu.cfg"
-}
-
-# --- Patch exe: replace mutex name so each bot instance can run independently ---
-# Original: "SwgClientInstanceRunning" (24 bytes)
-# Per-bot:  "SwgClientInstanceBot0001" (24 bytes)
-function Get-BotExe {
-    param([int]$Index)
-    $id   = "{0:D4}" -f ($Index + 1)
-    $dest = Join-Path $swgDir "SWGEmu_bot$id.exe"
-    if (-not (Test-Path $dest)) {
-        Write-Host "  [patch] Creating $dest"
-        $oldBytes = [System.Text.Encoding]::ASCII.GetBytes("SwgClientInstanceRunning")
-        $newBytes = [System.Text.Encoding]::ASCII.GetBytes("SwgClientInstanceBot$id")
-        $exeBytes = [System.IO.File]::ReadAllBytes($swgExe)
-        $patched  = 0
-        for ($i = 0; $i -le $exeBytes.Length - $oldBytes.Length; $i++) {
-            $match = $true
-            for ($j = 0; $j -lt $oldBytes.Length; $j++) {
-                if ($exeBytes[$i + $j] -ne $oldBytes[$j]) { $match = $false; break }
-            }
-            if ($match) {
-                for ($j = 0; $j -lt $newBytes.Length; $j++) {
-                    $exeBytes[$i + $j] = $newBytes[$j]
-                }
-                $patched++
-            }
-        }
-        [System.IO.File]::WriteAllBytes($dest, $exeBytes)
-        Write-Host "  [patch] Done ($patched occurrence(s) replaced)"
-    }
-    return $dest
 }
 
 # --- Win32 API ---
@@ -97,14 +68,16 @@ function Wait-WindowHandle {
 $procs = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 
 for ($i = 0; $i -lt $config.bots.Count; $i++) {
-    $bot    = $config.bots[$i]
-    $botExe = Get-BotExe -Index $i
-    Write-Host "[launch] $($bot.username) via $(Split-Path $botExe -Leaf)"
+    $bot = $config.bots[$i]
+    Write-Host "[launch] $($bot.username)"
 
-    $userCfg = "[ClientGame]`r`nloginClientID=$($bot.username)`r`nloginClientPassword=$($bot.password)`r`nautoConnectToLoginServer=1`r`n`r`n[ClientGraphics]`r`nscreenWidth=$winW`r`nscreenHeight=$winH`r`nwindowed=1`r`n"
+    # [SwgClient] is the correct section -- ConfigFile::getKeyBool("SwgClient","allowMultipleInstances",...)
+    $userCfg  = "[SwgClient]`r`nallowMultipleInstances=1`r`n`r`n"
+    $userCfg += "[ClientGame]`r`nloginClientID=$($bot.username)`r`nloginClientPassword=$($bot.password)`r`nautoConnectToLoginServer=1`r`n`r`n"
+    $userCfg += "[ClientGraphics]`r`nscreenWidth=$winW`r`nscreenHeight=$winH`r`nwindowed=1`r`n"
     [System.IO.File]::WriteAllText($userCfgPath, $userCfg, [System.Text.Encoding]::ASCII)
 
-    $proc = Start-Process -FilePath $botExe -WorkingDirectory $swgDir -PassThru
+    $proc = Start-Process -FilePath $swgExe -WorkingDirectory $swgDir -PassThru
     $procs.Add($proc)
 
     Write-Host "  PID $($proc.Id) - waiting ${delaySec}s for config read..."
@@ -139,4 +112,4 @@ Write-Host "[cleanup] Removing user.cfg"
 Remove-Item $userCfgPath -ErrorAction SilentlyContinue
 
 Write-Host ""
-Write-Host "[done] All bots launched. Close this window to exit."
+Write-Host "[done] All bots launched."
